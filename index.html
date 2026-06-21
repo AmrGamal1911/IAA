@@ -873,6 +873,18 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         box-shadow: 0 8px 24px rgba(37,99,235,0.45);
       }
 
+      .generate-plan-btn:disabled {
+        background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
+        cursor: not-allowed;
+        box-shadow: none;
+        transform: none;
+        opacity: 0.75;
+      }
+      .generate-plan-btn:disabled:hover {
+        transform: none;
+        box-shadow: none;
+      }
+
       /* ---- Manual Starting Term Override ---- */
       .manual-term-override {
         background: var(--accent-light);
@@ -4436,14 +4448,15 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
               if (selectedSummer.length > 0) {
                 const hasIncInSummer = selectedSummer.some(c => incompleteCourseCodes.has(c));
-                // Always labeled Special Case: accepts ANY course type (mixed semester types),
-                // which is the "special" characteristic of this summer.
+                // Special Case reflects the actual hour cap (>9h normal summer cap),
+                // matching the ⭐ toggle semantics used everywhere else in the UI —
+                // mixing course types alone is NOT special, only exceeding 9h is.
                 plan.push({
-                  name: `Summer Term ${summerYear}-${summerYear + 1} ⭐ Special Case`,
+                  name: `Summer Term ${summerYear}-${summerYear + 1}`,
                   courses: selectedSummer,
                   hours: summerHours,
                   isSummer: true,
-                  isSpecialCase: true,
+                  isSpecialCase: summerHours > 9,
                   hasIncomplete: hasIncInSummer
                 });
 
@@ -4451,7 +4464,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
                 toSchedule = toSchedule.filter(code => !selectedSummer.includes(code));
                 currentHours = calculateHours(completed);
 
-                addDebugLog(`   ✅ Added initial Summer: ${selectedSummer.length} courses, ${summerHours}h (Special Case — mixed course types allowed)`, 'success');
+                addDebugLog(`   ✅ Added initial Summer: ${selectedSummer.length} courses, ${summerHours}h`, 'success');
                 addDebugLog(`   → Courses: ${selectedSummer.join(', ')}`, 'info');
               }
             } else {
@@ -4716,11 +4729,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
                 if (selectedSummer.length > 0) {
                   const hasIncInSummer = selectedSummer.some(c => incompleteCourseCodes.has(c));
                   plan.push({
-                    name: `Summer Term ${year}-${year + 1} ⭐ Special Case`,
+                    name: `Summer Term ${year}-${year + 1}`,
                     courses: selectedSummer,
                     hours: summerHours,
                     isSummer: true,
-                    isSpecialCase: true,
+                    isSpecialCase: summerHours > 9,
                     hasIncomplete: hasIncInSummer
                   });
                   
@@ -4789,7 +4802,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
                     courses: finalCourses,
                     hours: finalHours,
                     isSummer: false,
-                    isSpecialCase: true,
+                    isSpecialCase: finalHours > 18,
                     hasIncomplete: hasIncInFinal
                   });
                   
@@ -4872,11 +4885,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
                   const summerYear = term1BaseYear + currentYearIndex;
                   
                   plan.push({
-                    name: `Summer Term ${summerYear}-${summerYear + 1} ⭐ Special Case`,
+                    name: `Summer Term ${summerYear}-${summerYear + 1}`,
                     courses: selectedFinalSummer,
                     hours: finalSummerHours,
                     isSummer: true,
-                    isSpecialCase: true,
+                    isSpecialCase: finalSummerHours > 9,
                     hasIncomplete: hasIncInFinalSummer
                   });
                   
@@ -4968,8 +4981,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           // Use non-incomplete hours to determine if special case (>9h non-incomplete = special)
           lastSem.isSpecialCase = (nonIncompleteHours > 9);
           if (lastSem.hasIncomplete) lastSem.isSpecialCase = true; // always special if has incomplete
-          const specialCaseLabel = lastSem.isSpecialCase ? ' ⭐ Special Case' : '';
-          lastSem.name          = `Summer Term ${baseYear}-${baseYear + 1}${specialCaseLabel}`;
+          // NOTE: the "⭐ Special Case" label is never baked into the name — it's
+          // derived solely from isSpecialCase wherever the semester is displayed
+          // (UI toggle button, text export, xlsx export). Baking it into the name
+          // AND deriving it again at display time caused it to show up twice.
+          lastSem.name          = `Summer Term ${baseYear}-${baseYear + 1}`;
 
           if (projectCourses.length > 0) {
             const projectNames = projectCourses.map(c => courses[c]?.name || c).join(', ');
@@ -5535,17 +5551,8 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
             // ── Upgrade summer to Special Case ──────────────────────────────
             summer.isSpecialCase = true;
-
-            // Update summer name to reflect Special Case
-            if (!summer.name.includes('Special')) {
-              const yrMatch = summer.name.match(/(\d{4})/);
-              if (yrMatch) {
-                const y = parseInt(yrMatch[1]);
-                summer.name = `Summer Term ${y}-${y + 1} ⭐ Special Case`;
-              } else {
-                summer.name = summer.name + ' ⭐ Special Case';
-              }
-            }
+            // Name stays clean — the ⭐ Special Case label is derived from
+            // isSpecialCase at display time (UI/export), never baked into name.
 
             // Add summer courses
             opt.summerAdditions.forEach(code => {
@@ -5747,7 +5754,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
                         const tIdx = Math.floor((simNextTerm - 1) / 2) + si;
                         refYear = simT1b + Math.floor(tIdx / 2);
                       }
-                      sem.name = `Summer Term ${refYear}-${refYear+1} ⭐ Special Case`;
+                      sem.name = `Summer Term ${refYear}-${refYear+1}`;
                     }
                   });
 
@@ -6140,9 +6147,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           // Update second-last to be the merged summer
           secondLast.courses = allCourses;
           secondLast.hours = totalHours;
-          secondLast.isSpecialCase = true; // Always special case when merging
+          // Special case only if the merged total actually exceeds the normal 9h
+          // summer cap (or contains an incomplete course, which always bypasses it).
+          secondLast.isSpecialCase = (combinedNonIncHours > 9) || hasIncomplete;
           secondLast.hasIncomplete = hasIncomplete;
-          secondLast.name = `Summer Term ${year}-${year + 1} ⭐ Special Case`;
+          secondLast.name = `Summer Term ${year}-${year + 1}`;
           
           // Remove the last semester
           plan.semesters.splice(lastIdx, 1);
@@ -7386,11 +7395,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
                 if (selectedSummer.length > 0) {
                   const hasIncInSummer = selectedSummer.some(c => incompleteCourseCodes.has(c));
                   newSemesters.push({
-                    name: `Summer Term ${year}-${year + 1} ⭐ Special Case`,
+                    name: `Summer Term ${year}-${year + 1}`,
                     courses: selectedSummer,
                     hours: summerHours,
                     isSummer: true,
-                    isSpecialCase: true,
+                    isSpecialCase: summerHours > 9,
                     hasIncomplete: hasIncInSummer
                   });
                   
@@ -7450,7 +7459,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
                     courses: finalCourses,
                     hours: finalHours,
                     isSummer: false,
-                    isSpecialCase: true,
+                    isSpecialCase: finalHours > 18,
                     hasIncomplete: hasIncInFinal
                   });
                   
@@ -7521,11 +7530,11 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
                   const summerYear = term1BaseYear + currentYearIndex;
                   
                   newSemesters.push({
-                    name: `Summer Term ${summerYear}-${summerYear + 1} ⭐ Special Case`,
+                    name: `Summer Term ${summerYear}-${summerYear + 1}`,
                     courses: selectedFinalSummer,
                     hours: finalSummerHours,
                     isSummer: true,
-                    isSpecialCase: true,
+                    isSpecialCase: finalSummerHours > 9,
                     hasIncomplete: hasIncInFinalSummer
                   });
                   
@@ -7578,7 +7587,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           
           // Create summer semester
           const summerSemester = {
-            name: `Summer Term ${year}-${year + 1}${isSpecialCase ? ' (Special Case)' : ''}`,
+            name: `Summer Term ${year}-${year + 1}`,
             courses: [],
             hours: 0,
             isSummer: true,
@@ -7798,11 +7807,17 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           if (manualOverrideEnabled) {
             // ==========================================
             // MANUAL OVERRIDE: the user explicitly picked a starting term
-            // (and optionally an initial Summer term), bypassing automatic
-            // transcript-based detection entirely.
+            // (First / Second / Summer), bypassing automatic transcript-based
+            // detection entirely.
             // ==========================================
-            finalStartTerm = parseInt(document.getElementById('manualTermSelect')?.value, 10) || 1;
-            forceSummerFirst = !!document.getElementById('manualSummerFirst')?.checked;
+            const manualValue = document.getElementById('manualTermSelect')?.value || '1';
+            if (manualValue === 'summer') {
+              finalStartTerm = 1;
+              forceSummerFirst = true;
+            } else {
+              finalStartTerm = parseInt(manualValue, 10) || 1;
+              forceSummerFirst = false;
+            }
 
             addDebugLog(`\n✋ MANUAL OVERRIDE ENABLED: Starting at Term ${finalStartTerm}` +
               (forceSummerFirst ? ' (with an initial Summer term first)' : ''), 'success');
@@ -7914,6 +7929,12 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
             return;
           }
 
+          const summerBox = document.getElementById('summerUploadBox');
+          if (summerBox && summerBox.style.display !== 'none' && window.summerAvailableCodes.size === 0) {
+            alert('The starting semester is a Summer term — please add the available Summer courses first.');
+            return;
+          }
+
           generateMultiplePlans();
           // Note: draggability on .course cells is already set by addCourse().
           // No need to re-register listeners here; that would create duplicates.
@@ -7922,6 +7943,13 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         // Show/hide the manual starting-term controls
         document.getElementById('manualTermEnabled').addEventListener('change', function(e) {
           document.getElementById('manualTermControls').style.display = e.target.checked ? 'flex' : 'none';
+          updateSummerCourseBoxVisibility();
+        });
+
+        // Selecting "Summer Term" reveals the available-summer-courses box;
+        // switching away from it hides the box again.
+        document.getElementById('manualTermSelect').addEventListener('change', function() {
+          updateSummerCourseBoxVisibility();
         });
 
         // ============================================================
@@ -7929,11 +7957,58 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         // ============================================================
         window.summerAvailableCodes = new Set(); // empty = no restriction (use all eligible)
 
+        // Shows the "Available Courses — Starting Summer" box only when the
+        // starting/next semester is actually a Summer term — either because
+        // the manual override explicitly selected "Summer Term", or because
+        // the uploaded بيان حالة was auto-detected as currently being in a
+        // Summer semester. Hidden in every other case.
+        function updateSummerCourseBoxVisibility() {
+          const box = document.getElementById('summerUploadBox');
+          if (!box) return;
+
+          const manualEnabled = !!document.getElementById('manualTermEnabled')?.checked;
+          if (manualEnabled) {
+            const manualValue = document.getElementById('manualTermSelect')?.value;
+            box.style.display = (manualValue === 'summer') ? 'block' : 'none';
+            updateGeneratePlanButtonState();
+            return;
+          }
+
+          if (window.lastParsedPdfCourses && window.lastParsedPdfCourses.length > 0) {
+            const detected = detectCurrentTerm(window.lastParsedPdfCourses);
+            box.style.display = detected.isSummerSemester ? 'block' : 'none';
+            updateGeneratePlanButtonState();
+            return;
+          }
+
+          box.style.display = 'none';
+          updateGeneratePlanButtonState();
+        }
+
+        // When the starting semester is Summer, the university's available-
+        // summer-courses list is required input (the optimizer needs to know
+        // which courses actually exist that summer) — so the Generate button
+        // stays disabled until at least one course code has been added.
+        function updateGeneratePlanButtonState() {
+          const btn = document.getElementById('generatePlanBtn');
+          const hint = document.getElementById('generatePlanBlockedHint');
+          const box = document.getElementById('summerUploadBox');
+          if (!btn || !box) return;
+
+          const summerStartActive = box.style.display !== 'none';
+          const summerListEmpty = window.summerAvailableCodes.size === 0;
+          const blocked = summerStartActive && summerListEmpty;
+
+          btn.disabled = blocked;
+          if (hint) hint.style.display = blocked ? 'block' : 'none';
+        }
+
         function renderSummerTags() {
           const tagsEl = document.getElementById('summerCoursesTags');
           const clearBtn = document.getElementById('summerCoursesClear');
           const hint = document.getElementById('summerUploadHint');
           tagsEl.innerHTML = '';
+          updateGeneratePlanButtonState();
           if (window.summerAvailableCodes.size === 0) {
             hint.style.display = '';
             clearBtn.style.display = 'none';
@@ -7985,477 +8060,6 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           }
         });
 
-        // File upload handler — supports .txt/.csv (direct parse) and images (OCR via OCRAD.js)
-        document.getElementById('summerUploadBtn').addEventListener('click', function() {
-          document.getElementById('summerCoursesFile').click();
-        });
-
-        // Pull candidate codes out of raw OCR/text output. Course list photos can show
-        // either CODES (IT322, CS319...) or full course NAMES ("Pattern Recognition"),
-        // so this checks both: known codes are matched as whole words anywhere in the
-        // text, and each OCR'd line is also fuzzy-matched against known course names
-        // (reusing the same normalize/similarity utilities used for transcript parsing).
-        // The "available summer courses" list the university posts isn't limited to
-        // whichever specialization (IT / AI) happens to be toggled on screen right
-        // now — summer offerings are drawn from BOTH tracks' catalogs, and the two
-        // tracks sometimes use a different code for the very same course (e.g.
-        // "Human Rights" is HU113 in the AI catalog but HU413 in the IT catalog).
-        // So course-list matching always uses the UNION of both catalogs, not just
-        // the currently-active `courses` object — otherwise a perfectly valid code
-        // or name from the "other" track would silently fail to match.
-        function buildSummerCourseCatalog() {
-          return Object.assign({}, it_courses, ai_courses);
-        }
-
-        function extractKnownCourseCodes(rawText) {
-          const found = new Set();
-          const catalog = buildSummerCourseCatalog();
-          const knownCodes = Object.keys(catalog); // e.g. IT322, CS319, TR, BMA001... (both tracks)
-          const upperText = rawText.toUpperCase();
-
-          // 1) Direct code matches anywhere in the text.
-          knownCodes.forEach(code => {
-            const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const re = new RegExp('\\b' + escaped + '\\b');
-            if (re.test(upperText)) found.add(code);
-          });
-
-          // 2) Name matches, line by line (course-list photos are usually one
-          // course title per line/row, so matching whole lines avoids mixing words
-          // from neighboring rows together).
-          //
-          // Several course names in this curriculum are near-duplicates that only
-          // differ by a trailing number or suffix — e.g. "Mathematics-2" vs
-          // "Mathematics-3", "Probability and Statistics-1" vs "...-2", "Project
-          // (1)" vs "Project (2)". A plain best-score fuzzy match can confidently
-          // pick the WRONG one of these, since they're 90%+ identical text. To
-          // avoid that:
-          //   a) An exact match (after normalizing) is always trusted outright and
-          //      skips fuzzy scoring entirely.
-          //   b) When fuzzy-matching, a candidate is skipped if it has a different
-          //      number than the line (so "Mathematics-2" never matches the
-          //      "Mathematics-3" entry, even if both are textually close).
-          //   c) If the best and second-best candidates are too close in score,
-          //      the match is treated as ambiguous and SKIPPED rather than guessed
-          //      — a missed course the user can add manually is far better than
-          //      silently adding the wrong one.
-          const nameEntries = knownCodes.map(code => ({
-            code,
-            norm: removeFillers(normalizeName(catalog[code].name))
-          })).filter(entry => entry.norm.length > 0);
-
-          const NAME_MATCH_THRESHOLD = 0.72;
-          const AMBIGUITY_MARGIN = 0.05; // min score gap required between 1st and 2nd best
-          rawText.split(/\r?\n/).forEach(rawLine => {
-            const line = rawLine.trim();
-            if (!line || line.length < 3) return;
-            const normLine = removeFillers(normalizeName(line));
-            if (!normLine) return;
-
-            // 2a) Exact normalized match wins outright — most reliable case.
-            // A name can legitimately match MORE THAN ONE code here (e.g. "Human
-            // Rights" = HU113 in the AI catalog AND HU413 in the IT catalog), so
-            // every exact tie is added, not just the first one found.
-            const exactMatches = nameEntries.filter(entry => entry.norm === normLine);
-            if (exactMatches.length > 0) {
-              exactMatches.forEach(m => found.add(m.code));
-              return;
-            }
-
-            // 2b) Fuzzy match, number-aware, with an ambiguity check.
-            const lineNums = normLine.match(/\d+/g) || [];
-            let best = null, bestScore = 0, secondScore = 0;
-            nameEntries.forEach(entry => {
-              const entryNums = entry.norm.match(/\d+/g) || [];
-              // Both sides have a number but they disagree → near-duplicate
-              // course with a different suffix, not a real match. Skip it.
-              if (lineNums.length && entryNums.length && lineNums.join(',') !== entryNums.join(',')) {
-                return;
-              }
-              const score = similarity(normLine, entry.norm);
-              if (score > bestScore) {
-                secondScore = bestScore;
-                bestScore = score;
-                best = entry;
-              } else if (score > secondScore) {
-                secondScore = score;
-              }
-            });
-            if (best && bestScore >= NAME_MATCH_THRESHOLD && (bestScore - secondScore) >= AMBIGUITY_MARGIN) {
-              found.add(best.code);
-            }
-          });
-
-          return found;
-        }
-
-
-        // ════════════════════════════════════════════════════════════════════
-        // SHARED OCR PIPELINE — used by BOTH the photo-upload path and the
-        // PDF path below. A PDF that has no real embedded text layer (e.g. a
-        // scanned page, or a screenshot of a course-list table saved/printed
-        // to PDF — which is exactly what a phone "Share > Print" flow
-        // produces) is processed exactly like an uploaded photo: rasterize →
-        // clean up → OCR. Keeping ONE pipeline means both paths benefit from
-        // the same tuning instead of drifting apart.
-        // ════════════════════════════════════════════════════════════════════
-
-        // Crops a canvas down to the bounding box of its non-white content.
-        // A PDF page is often a full Letter/A4 sheet with the actual course
-        // list sitting as a small image in the middle of mostly blank space
-        // — OCR'ing the whole page wastes resolution on margins instead of
-        // the text itself. Cropping first means the upscale step below
-        // spends its effort where it actually matters.
-        function cropToContentBoundingBox(canvas, padding = 12) {
-          const ctx = canvas.getContext('2d', { willReadFrequently: true });
-          const { width, height } = canvas;
-          const imageData = ctx.getImageData(0, 0, width, height);
-          const px = imageData.data;
-          let minX = width, minY = height, maxX = -1, maxY = -1;
-          const WHITE_THRESHOLD = 245;
-          for (let y = 0; y < height; y++) {
-            const rowStart = y * width * 4;
-            for (let x = 0; x < width; x++) {
-              const idx = rowStart + x * 4;
-              const gray = 0.299 * px[idx] + 0.587 * px[idx + 1] + 0.114 * px[idx + 2];
-              if (gray < WHITE_THRESHOLD) {
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (y < minY) minY = y;
-                if (y > maxY) maxY = y;
-              }
-            }
-          }
-          if (maxX < 0) return canvas; // blank page — nothing to crop
-          minX = Math.max(0, minX - padding);
-          minY = Math.max(0, minY - padding);
-          maxX = Math.min(width - 1, maxX + padding);
-          maxY = Math.min(height - 1, maxY + padding);
-          const cropW = maxX - minX + 1, cropH = maxY - minY + 1;
-          const cropped = document.createElement('canvas');
-          cropped.width = cropW;
-          cropped.height = cropH;
-          cropped.getContext('2d').drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
-          return cropped;
-        }
-
-        // Binarizes + strips grid/border lines + crops to content + upscales
-        // a native-resolution canvas, producing a clean, crisp, high-contrast
-        // image that OCR reads far more reliably than the raw source.
-        function preprocessForOcr(nativeCanvas) {
-          const nativeCtx = nativeCanvas.getContext('2d', { willReadFrequently: true });
-          const w = nativeCanvas.width, h = nativeCanvas.height;
-
-          // STEP 1: binarize at native resolution first. At native size, each
-          // pixel is either clearly text-dark or clearly cell-light with only
-          // a 1px anti-aliased edge, so thresholding here is clean. (Scaling
-          // up FIRST with smoothed/blurry interpolation, then thresholding,
-          // blends each character's edge pixels into a gray halo before the
-          // cutoff is applied — that's what mangles crisp letters into noise,
-          // e.g. "Fundamental of Management" coming back as "Furdam&ntal or
-          // Manag&mem".)
-          const imageData = nativeCtx.getImageData(0, 0, w, h);
-          const px = imageData.data;
-          for (let i = 0; i < px.length; i += 4) {
-            const gray = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
-            const bw = gray > 150 ? 255 : 0; // threshold: dark text -> black, light cell color -> white
-            px[i] = px[i + 1] = px[i + 2] = bw;
-          }
-
-          // STEP 2: strip solid grid/border lines, both horizontal AND
-          // vertical. Screenshots of bordered tables (alternating colored
-          // rows separated by black divider lines, often with an outer box
-          // border too) leave near-full-length black bars after the
-          // threshold above. Those bars sit flush against the text and badly
-          // confuse OCR segmentation — and a leftover vertical border down
-          // the side gets read as a column of stray "|" characters on every
-          // line. A genuine row/column of text, even bold text, never
-          // blackens more than ~50% of its width; a 1-2px divider/border
-          // line is ~95-100% black across its full length. So any row or
-          // column that's almost entirely black is a grid line, not text.
-          const BORDER_LINE_BLACK_FRACTION = 0.85;
-          for (let y = 0; y < h; y++) {
-            const rowStart = y * w * 4;
-            let blackCount = 0;
-            for (let x = 0; x < w; x++) {
-              if (px[rowStart + x * 4] === 0) blackCount++;
-            }
-            if (blackCount / w > BORDER_LINE_BLACK_FRACTION) {
-              for (let x = 0; x < w; x++) {
-                const idx = rowStart + x * 4;
-                px[idx] = px[idx + 1] = px[idx + 2] = 255;
-              }
-            }
-          }
-          for (let x = 0; x < w; x++) {
-            let blackCount = 0;
-            for (let y = 0; y < h; y++) {
-              if (px[(y * w + x) * 4] === 0) blackCount++;
-            }
-            if (blackCount / h > BORDER_LINE_BLACK_FRACTION) {
-              for (let y = 0; y < h; y++) {
-                const idx = (y * w + x) * 4;
-                px[idx] = px[idx + 1] = px[idx + 2] = 255;
-              }
-            }
-          }
-          nativeCtx.putImageData(imageData, 0, 0);
-
-          // STEP 3: crop to the actual content (drops blank PDF-page margins).
-          const cropped = cropToContentBoundingBox(nativeCanvas);
-
-          // STEP 4: NOW upscale — with image smoothing turned OFF so each
-          // original pixel becomes a sharp, solid block instead of being
-          // blurred into its neighbors. OCR reads large crisp text far more
-          // reliably than small smoothed text.
-          const cw = cropped.width, ch = cropped.height;
-          const scale = cw < 900 ? Math.min(4, 900 / cw) : 1;
-          const finalCanvas = document.createElement('canvas');
-          finalCanvas.width = Math.round(cw * scale);
-          finalCanvas.height = Math.round(ch * scale);
-          const finalCtx = finalCanvas.getContext('2d', { willReadFrequently: true });
-          finalCtx.imageSmoothingEnabled = false;
-          finalCtx.drawImage(cropped, 0, 0, finalCanvas.width, finalCanvas.height);
-          return finalCanvas;
-        }
-
-        // Tesseract.js gives MUCH better accuracy than OCRAD for printed
-        // text/tables, but it needs Web Workers + fetching its language data
-        // over the network — which fails if this page is opened directly as
-        // a local file:// (no http(s) origin for the worker/CORS). So: try
-        // Tesseract.js first; if it can't initialize for ANY reason (missing
-        // script, blocked worker, no network), fall back transparently to
-        // OCRAD, which runs fully offline on the main thread with no worker
-        // and works the same whether this file is opened locally or hosted.
-        let _tesseractWorkerPromise = null;
-        function withTimeout(promise, ms, errMsg) {
-          return Promise.race([
-            promise,
-            new Promise((_, reject) => setTimeout(() => reject(new Error(errMsg || 'Timed out')), ms))
-          ]);
-        }
-        function getTesseractWorker() {
-          if (!_tesseractWorkerPromise) {
-            _tesseractWorkerPromise = (typeof Tesseract === 'undefined')
-              ? Promise.reject(new Error('Tesseract.js script did not load'))
-              : withTimeout(Tesseract.createWorker('eng'), 8000, 'Tesseract.js worker init timed out');
-            // Allow a later retry if this attempt failed (don't permanently
-            // cache a rejected promise).
-            _tesseractWorkerPromise.catch(() => { _tesseractWorkerPromise = null; });
-          }
-          return _tesseractWorkerPromise;
-        }
-
-        // Runs OCR on a native-resolution canvas (from either a photo or a
-        // rasterized PDF page) and returns the raw recognized text.
-        async function ocrCanvasToText(nativeCanvas) {
-          const cleanCanvas = preprocessForOcr(nativeCanvas);
-          try {
-            const worker = await getTesseractWorker();
-            const { data } = await withTimeout(worker.recognize(cleanCanvas), 20000, 'Tesseract.js recognition timed out');
-            if (data && data.text && data.text.trim().length > 0) {
-              console.log('[OCR] Tesseract.js output:', data.text);
-              return data.text;
-            }
-            console.warn('[OCR] Tesseract.js returned empty text, falling back to OCRAD');
-          } catch (err) {
-            console.warn('[OCR] Tesseract.js unavailable, falling back to OCRAD:', err);
-          }
-          // Fallback engine — synchronous, fully offline, no worker needed.
-          if (typeof OCRAD === 'undefined') {
-            console.error('[OCR] OCRAD global is not defined either — no OCR engine available.');
-            return '';
-          }
-          const rawText = OCRAD(cleanCanvas) || '';
-          console.log('[OCR] OCRAD output:', rawText);
-          return rawText;
-        }
-
-        document.getElementById('summerCoursesFile').addEventListener('change', function(e) {
-          const file = e.target.files[0];
-          if (!file) return;
-          e.target.value = '';
-
-          const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-          const isImage = file.type.startsWith('image/');
-
-          if (isPdf) {
-            runSummerPdfExtraction(file);
-            return;
-          }
-
-          if (!isImage) {
-            // Plain text / CSV path. Runs through the same code+name matcher as the
-            // image/OCR path below, so a file listing course NAMES (e.g. exported
-            // from a table) works just as well as a file listing course CODES.
-            // (Previously this path took every line literally as a "code", so a
-            // name like "Selected labs in AI" got added as a bogus unrecognized
-            // code instead of being matched to the real course.)
-            const reader = new FileReader();
-            reader.onload = function(ev) {
-              const text = ev.target.result;
-              const matched = extractKnownCourseCodes(text);
-              matched.forEach(code => window.summerAvailableCodes.add(code));
-              renderSummerTags();
-              if (matched.size > 0) {
-                if (typeof TechBot !== 'undefined' && TechBot.success) {
-                  TechBot.success('☀️ Summer course list loaded: ' + matched.size + ' course(s).');
-                }
-              } else if (typeof TechBot !== 'undefined' && TechBot.error) {
-                TechBot.error('⚠️ Could not recognize any courses in that file. Make sure each line is a known course code or course name.');
-              }
-            };
-            reader.readAsText(file);
-            return;
-          }
-
-          // Image path — run OCR (see ocrCanvasToText / preprocessForOcr above).
-          const hint = document.getElementById('summerUploadHint');
-          const prevHintText = hint.textContent;
-          hint.style.display = '';
-          hint.textContent = '🔍 Reading the course list from the image… this can take a few seconds.';
-
-          console.log('[Summer OCR] Starting OCR for file:', file.name, file.type, file.size, 'bytes');
-
-          const img = new Image();
-          const objectUrl = URL.createObjectURL(file);
-
-          img.onload = async function() {
-            console.log('[Summer OCR] Image loaded:', img.width, 'x', img.height);
-            try {
-              const nativeCanvas = document.createElement('canvas');
-              nativeCanvas.width = img.width;
-              nativeCanvas.height = img.height;
-              nativeCanvas.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0);
-
-              const rawText = await ocrCanvasToText(nativeCanvas);
-              URL.revokeObjectURL(objectUrl);
-
-              const matched = extractKnownCourseCodes(rawText);
-              console.log('[Summer OCR] Matched codes:', [...matched]);
-              matched.forEach(code => window.summerAvailableCodes.add(code));
-              renderSummerTags();
-              if (matched.size > 0) {
-                if (typeof TechBot !== 'undefined' && TechBot.success) {
-                  TechBot.success('☀️ Found ' + matched.size + ' course(s) in the image.');
-                }
-              } else {
-                hint.textContent = prevHintText;
-                if (typeof TechBot !== 'undefined' && TechBot.error) {
-                  TechBot.error('⚠️ Could not recognize any courses in that image (open the browser console with F12 to see what OCR actually read). Try a clearer, higher-contrast photo, or type/upload the codes directly.');
-                }
-              }
-            } catch (err) {
-              console.error('[Summer OCR] Exception during OCR:', err);
-              URL.revokeObjectURL(objectUrl);
-              hint.textContent = prevHintText;
-              if (typeof TechBot !== 'undefined' && TechBot.error) {
-                TechBot.error('⚠️ OCR error: ' + (err && err.message ? err.message : err) + ' — open the browser console (F12) for details, or type/upload the codes directly.');
-              }
-            }
-          };
-
-          img.onerror = function(ev) {
-            console.error('[Summer OCR] Image failed to load:', ev);
-            URL.revokeObjectURL(objectUrl);
-            hint.textContent = prevHintText;
-            if (typeof TechBot !== 'undefined' && TechBot.error) {
-              TechBot.error('⚠️ Could not load that image file. Try a different photo, or type/upload the codes directly.');
-            }
-          };
-
-          img.src = objectUrl;
-        });
-
-        // PDF path: try the PDF's real embedded text layer first (fast,
-        // exact, no OCR needed); if that yields nothing — e.g. the PDF is
-        // just a scanned page or a screenshot of a course-offerings table
-        // saved/printed as a PDF — fall back to rasterizing each page and
-        // running it through the exact same OCR pipeline used for uploaded
-        // photos above.
-        async function runSummerPdfExtraction(file) {
-          if (typeof pdfjsLib === 'undefined') {
-            if (typeof TechBot !== 'undefined' && TechBot.error) {
-              TechBot.error('⚠️ PDF library failed to load. Check your internet connection, or type/upload the codes directly.');
-            }
-            return;
-          }
-
-          const hint = document.getElementById('summerUploadHint');
-          const prevHintText = hint.textContent;
-          hint.style.display = '';
-          hint.textContent = '🔍 Reading the course list from the PDF… this can take a few seconds.';
-
-          console.log('[Summer PDF] Starting extraction for file:', file.name, file.type, file.size, 'bytes');
-
-          try {
-            const arrayBuffer = await file.arrayBuffer();
-            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-
-            // 1) Try the PDF's real text layer first — fast and exact when present
-            // (e.g. a course list exported/typed straight into a PDF or table).
-            let textLayer = '';
-            for (let i = 1; i <= pdf.numPages; i++) {
-              const page = await pdf.getPage(i);
-              const textContent = await page.getTextContent();
-              textLayer += textContent.items.map(item => item.str).join(' ') + '\n';
-            }
-
-            let matched = extractKnownCourseCodes(textLayer);
-            console.log('[Summer PDF] Text-layer matches:', [...matched]);
-
-            // 2) No matches from the text layer — most likely because there IS
-            // no real text layer at all, just an embedded image (a phone photo
-            // or screenshot of the course-offerings board saved as a PDF).
-            // Rasterize every page and OCR it, same as the photo-upload path.
-            if (matched.size === 0) {
-              console.log('[Summer PDF] No text-layer matches, falling back to OCR rasterization');
-              let ocrText = '';
-              for (let i = 1; i <= pdf.numPages; i++) {
-                if (pdf.numPages > 1) {
-                  hint.textContent = `🔍 Reading page ${i} of ${pdf.numPages} from the PDF… this can take a few seconds.`;
-                }
-                const page = await pdf.getPage(i);
-                const baseViewport = page.getViewport({ scale: 1 });
-                // Render at a high-enough resolution that even a small
-                // embedded screenshot ends up with plenty of pixels to OCR.
-                const scale = Math.max(2, 1600 / baseViewport.width);
-                const viewport = page.getViewport({ scale });
-
-                const pageCanvas = document.createElement('canvas');
-                pageCanvas.width = Math.round(viewport.width);
-                pageCanvas.height = Math.round(viewport.height);
-                const pageCtx = pageCanvas.getContext('2d', { willReadFrequently: true });
-                await page.render({ canvasContext: pageCtx, viewport }).promise;
-
-                ocrText += (await ocrCanvasToText(pageCanvas)) + '\n';
-              }
-              console.log('[Summer PDF] OCR raw output:', ocrText);
-              matched = extractKnownCourseCodes(ocrText);
-              console.log('[Summer PDF] OCR matches:', [...matched]);
-            }
-
-            matched.forEach(code => window.summerAvailableCodes.add(code));
-            renderSummerTags();
-
-            if (matched.size > 0) {
-              if (typeof TechBot !== 'undefined' && TechBot.success) {
-                TechBot.success('☀️ Found ' + matched.size + ' course(s) in the PDF.');
-              }
-            } else {
-              hint.textContent = prevHintText;
-              if (typeof TechBot !== 'undefined' && TechBot.error) {
-                TechBot.error('⚠️ Could not recognize any courses in that PDF (open the browser console with F12 to see what was read). Try a clearer file, or type/upload the codes directly.');
-              }
-            }
-          } catch (err) {
-            console.error('[Summer PDF] Exception during PDF extraction:', err);
-            hint.textContent = prevHintText;
-            if (typeof TechBot !== 'undefined' && TechBot.error) {
-              TechBot.error('⚠️ PDF error: ' + (err && err.message ? err.message : err) + ' — open the browser console (F12) for details, or type/upload the codes directly.');
-            }
-          }
-        }
 
         // Handle file upload
         document.getElementById('pdfInput').addEventListener('change', async function(e) {
@@ -8512,9 +8116,15 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           window.lastParsedPdfCourses = pdfCourses;
           addDebugLog(`💾 Stored ${pdfCourses.length} course records for analysis`, 'info');
 
-          // Display student info
+          // Reveal the "Available Courses — Starting Summer" box only when the
+          // transcript itself indicates the starting/next semester is a Summer
+          // term (same detection used later to auto-set forceSummerFirst).
+          updateSummerCourseBoxVisibility();
+
+          // Student info is parsed and stored (still used as a fallback by
+          // exportAsXlsx/exportAsText elsewhere) but the card itself stays
+          // hidden — per request, it's no longer displayed in the UI.
           if (studentInfo.name) {
-            document.getElementById('studentInfo').style.display = 'block';
             document.getElementById('studentName').textContent = `👤 Name: ${studentInfo.name}`;
             document.getElementById('studentId').textContent = `🆔 ID: ${studentInfo.id || 'N/A'}`;
             document.getElementById('studentLevel').textContent = `📚 Level: ${studentInfo.level || 'N/A'}`;
@@ -8692,17 +8302,15 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         <p class="upload-hint">Click to upload بيان حالة - PDF or Excel format</p>
       </div>
 
-      <!-- Summer Available Courses Upload -->
-      <div class="summer-upload-box" id="summerUploadBox">
-        <input type="file" id="summerCoursesFile" accept=".txt,.csv,.pdf,application/pdf,image/*" />
+      <!-- Summer Available Courses (shown only when the starting semester is detected as Summer) -->
+      <div class="summer-upload-box" id="summerUploadBox" style="display:none;">
         <div class="summer-upload-header">
           <span class="summer-upload-title">☀️ Available Courses — Starting Summer
             <span style="font-weight:400;font-size:12px;color:#b45309;">(optional)</span>
           </span>
-          <button class="summer-upload-btn" id="summerUploadBtn" type="button">📋 Upload List, PDF, or Photo</button>
         </div>
         <div class="summer-courses-tags" id="summerCoursesTags"></div>
-        <p class="summer-upload-hint" id="summerUploadHint">Only applies to the very first detected/starting summer — later summers in the plan are unaffected. Upload a .txt/.csv, a PDF, or a photo of the course list (even a screenshot saved as PDF), or type codes below.</p>
+        <p class="summer-upload-hint" id="summerUploadHint">Only applies to the very first detected/starting summer — later summers in the plan are unaffected. Type the course codes below.</p>
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
           <input type="text" id="summerCourseInput" placeholder="e.g. CS319, IT322, TR" style="flex:1;padding:7px 12px;border:1px solid #fed7aa;border-radius:6px;font-size:13px;background:#fffbf7;outline:none;" />
           <button onclick="addSummerCourseFromInput()" type="button" style="padding:7px 14px;background:#f97316;color:white;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Add</button>
@@ -8770,6 +8378,9 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           <h3>🎓 Study Plan Generator</h3>
           <button class="generate-plan-btn" id="generatePlanBtn">Generate Optimized Study Plan</button>
         </div>
+        <p id="generatePlanBlockedHint" style="display:none;color:#b45309;font-size:13px;font-weight:600;margin:-6px 0 14px;">
+          ☀️ Add at least one available Summer course below before generating the plan.
+        </p>
 
         <!-- Manual Starting Term Override -->
         <div class="manual-term-override" id="manualTermOverride">
@@ -8783,31 +8394,17 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
           <div class="manual-term-controls" id="manualTermControls" style="display:none;">
             <div class="manual-term-row">
-              <label class="field-label" for="manualTermSelect">Resume regular plan at</label>
+              <label class="field-label" for="manualTermSelect">Starting term</label>
               <select id="manualTermSelect">
-                <option value="1">Year 1 — First Term</option>
-                <option value="2">Year 1 — Second Term</option>
-                <option value="3" selected>Year 2 — First Term</option>
-                <option value="4">Year 2 — Second Term</option>
-                <option value="5">Year 3 — First Term</option>
-                <option value="6">Year 3 — Second Term</option>
-                <option value="7">Year 4 — First Term</option>
-                <option value="8">Year 4 — Second Term</option>
+                <option value="1" selected>First Term</option>
+                <option value="2">Second Term</option>
+                <option value="summer">Summer Term</option>
               </select>
             </div>
 
-            <label class="manual-summer-toggle">
-              <span class="switch">
-                <input type="checkbox" id="manualSummerFirst">
-                <span class="slider"></span>
-              </span>
-              ☀️ I'm starting with a Summer term first
-            </label>
-
             <p class="manual-term-hint">
-              Turn this on to override automatic transcript detection. If "Summer term first" is checked,
-              the plan will open with a Summer term (any leftover/eligible courses, ≤12h) and then continue
-              with regular terms starting from the term selected above.
+              Turn this on to override automatic transcript detection and pick exactly what
+              kind of term the plan should resume at: First, Second, or Summer.
               <br><br>
               <strong>Note:</strong> If your transcript shows courses registered in a summer semester (mix of course types or TR registered), the system will automatically detect this and start the plan with a Summer term — no manual override needed.
             </p>
