@@ -2020,7 +2020,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/ocrad.js/ocrad.js"></script>
     <script>
       // Configure PDF.js worker - use workerSrc with a fallback
       if (typeof pdfjsLib !== 'undefined') {
@@ -7945,7 +7945,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           }
         });
 
-        // File upload handler — supports .txt/.csv (direct parse) and images (OCR via Tesseract.js)
+        // File upload handler — supports .txt/.csv (direct parse) and images (OCR via OCRAD.js)
         document.getElementById('summerUploadBtn').addEventListener('click', function() {
           document.getElementById('summerCoursesFile').click();
         });
@@ -8023,10 +8023,15 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
             return;
           }
 
-          // Image path — run in-browser OCR (Tesseract.js), then match against
-          // known course codes AND names so garbled OCR output doesn't add junk
-          // entries, and lists that show course titles instead of codes still work.
-          if (typeof Tesseract === 'undefined') {
+          // Image path — run in-browser OCR. We use OCRAD.js instead of
+          // Tesseract.js here because Tesseract relies on a separate Web Worker
+          // thread, which browsers block when this page is opened directly as a
+          // local file:// (the security restriction is "Unsafe attempt to load
+          // URL... 'file:' URLs are treated as unique security origins"). OCRAD.js
+          // runs synchronously on the main thread with no worker, so it works the
+          // same whether this file is opened locally or hosted on a server — at
+          // the cost of being a simpler, less accurate OCR engine than Tesseract.
+          if (typeof OCRAD === 'undefined') {
             if (typeof TechBot !== 'undefined' && TechBot.error) {
               TechBot.error('⚠️ OCR library failed to load. Check your internet connection and try again, or upload a .txt/.csv instead.');
             }
@@ -8038,9 +8043,34 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           hint.style.display = '';
           hint.textContent = '🔍 Reading the course list from the image… this can take a few seconds.';
 
-          Tesseract.recognize(file, 'eng')
-            .then(function(result) {
-              const rawText = result?.data?.text || '';
+          const img = new Image();
+          const objectUrl = URL.createObjectURL(file);
+
+          img.onload = function() {
+            try {
+              // Upscale small images — OCR engines read larger text more reliably.
+              const scale = img.width < 900 ? Math.min(3, 900 / img.width) : 1;
+              const canvas = document.createElement('canvas');
+              canvas.width = Math.round(img.width * scale);
+              canvas.height = Math.round(img.height * scale);
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+              // Preprocess: convert to high-contrast black-on-white. OCRAD.js (a
+              // simple rule-based engine) reads clean black text on white far more
+              // reliably than colored table cells like this course-list image.
+              const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+              const px = imageData.data;
+              for (let i = 0; i < px.length; i += 4) {
+                const gray = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+                const bw = gray > 150 ? 255 : 0; // threshold: dark text -> black, light cell color -> white
+                px[i] = px[i + 1] = px[i + 2] = bw;
+              }
+              ctx.putImageData(imageData, 0, 0);
+
+              const rawText = OCRAD(canvas) || '';
+              URL.revokeObjectURL(objectUrl);
+
               const matched = extractKnownCourseCodes(rawText);
               matched.forEach(code => window.summerAvailableCodes.add(code));
               renderSummerTags();
@@ -8051,17 +8081,28 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
               } else {
                 hint.textContent = prevHintText;
                 if (typeof TechBot !== 'undefined' && TechBot.error) {
-                  TechBot.error('⚠️ Could not recognize any courses in that image. Try a clearer photo, or type/upload the codes directly.');
+                  TechBot.error('⚠️ Could not recognize any courses in that image. Try a clearer, higher-contrast photo, or type/upload the codes directly.');
                 }
               }
-            })
-            .catch(function(err) {
+            } catch (err) {
               console.error('OCR error:', err);
+              URL.revokeObjectURL(objectUrl);
               hint.textContent = prevHintText;
               if (typeof TechBot !== 'undefined' && TechBot.error) {
                 TechBot.error('⚠️ Could not read that image. Try a clearer photo, or type/upload the codes directly.');
               }
-            });
+            }
+          };
+
+          img.onerror = function() {
+            URL.revokeObjectURL(objectUrl);
+            hint.textContent = prevHintText;
+            if (typeof TechBot !== 'undefined' && TechBot.error) {
+              TechBot.error('⚠️ Could not load that image file. Try a different photo, or type/upload the codes directly.');
+            }
+          };
+
+          img.src = objectUrl;
         });
 
         // Handle file upload
