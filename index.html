@@ -2021,6 +2021,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/ocrad.js/ocrad.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script>
       // Configure PDF.js worker - use workerSrc with a fallback
       if (typeof pdfjsLib !== 'undefined') {
@@ -4129,7 +4130,18 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
               // Convert next semester to term number
               // Semester 1 → Term 1, Semester 2 → Term 2, etc.
               currentTerm.termNumber = nextSemester;
-              
+
+              // Keep the UNCAPPED next-semester value around separately.
+              // This is the true "everything at or below this semester has
+              // already been attempted" boundary, and is what the forced
+              // initial Summer term uses to decide which failed courses are
+              // retake-eligible. currentTerm.termNumber itself gets capped to
+              // 8 below purely for term/year-numbering purposes (the catalog
+              // only defines 8 semesters) — capping it must NOT also shrink
+              // the retake boundary, or else failed Semester-8 courses get
+              // misclassified as "not yet attempted" and dropped from Summer.
+              currentTerm.retakeCutoffSemester = nextSemester;
+
               if (currentTerm.termNumber > 8) {
                 currentTerm.termNumber = 8; // Cap at term 8
               }
@@ -4184,7 +4196,15 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
               addDebugLog(`🎯 No current registration, estimated next term: ${currentTerm.termNumber} (${passedCourses} passed courses)`, 'info');
             }
           }
-          
+
+          // Default the retake cutoff to the term number itself for every
+          // detection path that didn't explicitly set a different (uncapped)
+          // value above. Only the "all courses graded, maxSemester==8" path
+          // needs retakeCutoffSemester to differ from the (capped) termNumber.
+          if (currentTerm.retakeCutoffSemester === undefined) {
+            currentTerm.retakeCutoffSemester = currentTerm.termNumber;
+          }
+
           return currentTerm;
         }
 
@@ -4259,7 +4279,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         }
 
         // Generate a study plan
-        function generateStudyPlan(strategy = 'balanced', startTerm = 3, forceSummerFirst = false) {
+        function generateStudyPlan(strategy = 'balanced', startTerm = 3, forceSummerFirst = false, retakeCutoffSemester = null) {
           const uniqueSelected = [...new Set(selected)];
           const remaining = Object.keys(courses).filter(code => {
             // Exclude completed courses and special courses
@@ -4367,10 +4387,18 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
               if (code === 'TR') return currentHours >= 60;
 
               // KEY RULE: The initial auto-detected summer is for RETAKES only.
-              // Only include courses from semesters BELOW startTerm (i.e. failed courses
-              // the student needs to retake). Do NOT advance new courses from semester
-              // startTerm or higher — those belong in the regular terms that follow.
-              if (course.semester >= startTerm) return false;
+              // Only include courses from semesters BELOW the retake cutoff (i.e.
+              // failed courses the student needs to retake). Do NOT advance new,
+              // never-attempted courses from that semester or higher — those belong
+              // in the regular terms that follow. Use retakeCutoffSemester when it's
+              // available: it's the same as startTerm in the normal case, but when
+              // the transcript shows every catalog semester (1-8) already has a
+              // grade, startTerm gets capped down to 8 for term/year-numbering
+              // purposes — using that capped value here would wrongly exclude
+              // failed Semester-8 courses (already attempted) as if they were
+              // un-attempted courses belonging to a future term.
+              const retakeCutoff = (retakeCutoffSemester != null) ? retakeCutoffSemester : startTerm;
+              if (course.semester >= retakeCutoff) return false;
 
               // If the university provided an available-summer-courses list, only
               // allow courses that actually appear on that list.
@@ -6281,11 +6309,16 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
             semesterCard.appendChild(cardFooter);
             
             // Add "Add Summer After This Semester" button ONLY after Second semesters (Spring)
-            // Summer comes after spring, not after fall
-            const isSecondSemester = semester.name.includes('Second Term') || semester.isSummer;
+            // Summer comes after spring, not after fall — and never after ANOTHER
+            // summer term. A plan can start with a Summer term (e.g. the student
+            // told us they're currently in/about to start a Summer), and that
+            // initial Summer card must NOT offer to add yet another Summer right
+            // after itself — there's no "Summer after Summer" in a real calendar.
+            const isSecondSemester = semester.name.includes('Second Term') && !semester.isSummer;
             
-            if (isSecondSemester || semesterIndex === plan.semesters.length - 1) {
-              // Show after second semesters or after the last semester (for flexibility)
+            if (!semester.isSummer && (isSecondSemester || semesterIndex === plan.semesters.length - 1)) {
+              // Show after second semesters or after the last semester (for flexibility) —
+              // but only when that semester isn't itself a Summer term.
               const addSummerDiv = document.createElement('div');
               addSummerDiv.style.textAlign = 'center';
               addSummerDiv.style.margin = '8px 0';
@@ -7755,6 +7788,12 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           const manualOverrideEnabled = !!document.getElementById('manualTermEnabled')?.checked;
           let finalStartTerm;
           let forceSummerFirst = false;
+          // Retake-eligibility cutoff for the forced initial Summer term. Normally
+          // equal to finalStartTerm, but for transcripts where every catalog
+          // semester (1-8) already has a grade, detectCurrentTerm reports an
+          // UNCAPPED value here so failed Semester-8 courses still qualify as
+          // Summer retakes even though finalStartTerm itself is capped at 8.
+          let retakeCutoffSemester = null;
 
           if (manualOverrideEnabled) {
             // ==========================================
@@ -7793,6 +7832,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
                 }
 
                 detectedStartTerm = currentTerm.termNumber;
+                retakeCutoffSemester = currentTerm.retakeCutoffSemester;
 
                 // ── AUTO-DETECT SUMMER START ──
                 // If the transcript shows the student is currently in a summer semester,
@@ -7827,7 +7867,7 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           // 4. Fills semesters to maximum hours (18 or 21 at special cases)
           // 5. Aims for fastest graduation
           // 6. Automatically adds Summer term with TR when 60 hours gained
-          const optimizedPlan = generateStudyPlan('optimized', finalStartTerm, forceSummerFirst);
+          const optimizedPlan = generateStudyPlan('optimized', finalStartTerm, forceSummerFirst, retakeCutoffSemester);
 
           // Compute and store term1BaseYear so replanAfterMove can use
           // the correct year offset instead of the hardcoded 2024 fallback.
@@ -7955,9 +7995,22 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
         // so this checks both: known codes are matched as whole words anywhere in the
         // text, and each OCR'd line is also fuzzy-matched against known course names
         // (reusing the same normalize/similarity utilities used for transcript parsing).
+        // The "available summer courses" list the university posts isn't limited to
+        // whichever specialization (IT / AI) happens to be toggled on screen right
+        // now — summer offerings are drawn from BOTH tracks' catalogs, and the two
+        // tracks sometimes use a different code for the very same course (e.g.
+        // "Human Rights" is HU113 in the AI catalog but HU413 in the IT catalog).
+        // So course-list matching always uses the UNION of both catalogs, not just
+        // the currently-active `courses` object — otherwise a perfectly valid code
+        // or name from the "other" track would silently fail to match.
+        function buildSummerCourseCatalog() {
+          return Object.assign({}, it_courses, ai_courses);
+        }
+
         function extractKnownCourseCodes(rawText) {
           const found = new Set();
-          const knownCodes = Object.keys(courses); // e.g. IT322, CS319, TR, BMA001...
+          const catalog = buildSummerCourseCatalog();
+          const knownCodes = Object.keys(catalog); // e.g. IT322, CS319, TR, BMA001... (both tracks)
           const upperText = rawText.toUpperCase();
 
           // 1) Direct code matches anywhere in the text.
@@ -7967,31 +8020,68 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
             if (re.test(upperText)) found.add(code);
           });
 
-          // 2) Fuzzy name matches, line by line (course-list photos are usually one
+          // 2) Name matches, line by line (course-list photos are usually one
           // course title per line/row, so matching whole lines avoids mixing words
           // from neighboring rows together).
+          //
+          // Several course names in this curriculum are near-duplicates that only
+          // differ by a trailing number or suffix — e.g. "Mathematics-2" vs
+          // "Mathematics-3", "Probability and Statistics-1" vs "...-2", "Project
+          // (1)" vs "Project (2)". A plain best-score fuzzy match can confidently
+          // pick the WRONG one of these, since they're 90%+ identical text. To
+          // avoid that:
+          //   a) An exact match (after normalizing) is always trusted outright and
+          //      skips fuzzy scoring entirely.
+          //   b) When fuzzy-matching, a candidate is skipped if it has a different
+          //      number than the line (so "Mathematics-2" never matches the
+          //      "Mathematics-3" entry, even if both are textually close).
+          //   c) If the best and second-best candidates are too close in score,
+          //      the match is treated as ambiguous and SKIPPED rather than guessed
+          //      — a missed course the user can add manually is far better than
+          //      silently adding the wrong one.
           const nameEntries = knownCodes.map(code => ({
             code,
-            norm: removeFillers(normalizeName(courses[code].name))
+            norm: removeFillers(normalizeName(catalog[code].name))
           })).filter(entry => entry.norm.length > 0);
 
           const NAME_MATCH_THRESHOLD = 0.72;
+          const AMBIGUITY_MARGIN = 0.05; // min score gap required between 1st and 2nd best
           rawText.split(/\r?\n/).forEach(rawLine => {
             const line = rawLine.trim();
             if (!line || line.length < 3) return;
             const normLine = removeFillers(normalizeName(line));
             if (!normLine) return;
 
-            let best = null;
-            let bestScore = 0;
+            // 2a) Exact normalized match wins outright — most reliable case.
+            // A name can legitimately match MORE THAN ONE code here (e.g. "Human
+            // Rights" = HU113 in the AI catalog AND HU413 in the IT catalog), so
+            // every exact tie is added, not just the first one found.
+            const exactMatches = nameEntries.filter(entry => entry.norm === normLine);
+            if (exactMatches.length > 0) {
+              exactMatches.forEach(m => found.add(m.code));
+              return;
+            }
+
+            // 2b) Fuzzy match, number-aware, with an ambiguity check.
+            const lineNums = normLine.match(/\d+/g) || [];
+            let best = null, bestScore = 0, secondScore = 0;
             nameEntries.forEach(entry => {
+              const entryNums = entry.norm.match(/\d+/g) || [];
+              // Both sides have a number but they disagree → near-duplicate
+              // course with a different suffix, not a real match. Skip it.
+              if (lineNums.length && entryNums.length && lineNums.join(',') !== entryNums.join(',')) {
+                return;
+              }
               const score = similarity(normLine, entry.norm);
               if (score > bestScore) {
+                secondScore = bestScore;
                 bestScore = score;
                 best = entry;
+              } else if (score > secondScore) {
+                secondScore = score;
               }
             });
-            if (best && bestScore >= NAME_MATCH_THRESHOLD) {
+            if (best && bestScore >= NAME_MATCH_THRESHOLD && (bestScore - secondScore) >= AMBIGUITY_MARGIN) {
               found.add(best.code);
             }
           });
@@ -7999,79 +8089,250 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
           return found;
         }
 
+
+        // ════════════════════════════════════════════════════════════════════
+        // SHARED OCR PIPELINE — used by BOTH the photo-upload path and the
+        // PDF path below. A PDF that has no real embedded text layer (e.g. a
+        // scanned page, or a screenshot of a course-list table saved/printed
+        // to PDF — which is exactly what a phone "Share > Print" flow
+        // produces) is processed exactly like an uploaded photo: rasterize →
+        // clean up → OCR. Keeping ONE pipeline means both paths benefit from
+        // the same tuning instead of drifting apart.
+        // ════════════════════════════════════════════════════════════════════
+
+        // Crops a canvas down to the bounding box of its non-white content.
+        // A PDF page is often a full Letter/A4 sheet with the actual course
+        // list sitting as a small image in the middle of mostly blank space
+        // — OCR'ing the whole page wastes resolution on margins instead of
+        // the text itself. Cropping first means the upscale step below
+        // spends its effort where it actually matters.
+        function cropToContentBoundingBox(canvas, padding = 12) {
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          const { width, height } = canvas;
+          const imageData = ctx.getImageData(0, 0, width, height);
+          const px = imageData.data;
+          let minX = width, minY = height, maxX = -1, maxY = -1;
+          const WHITE_THRESHOLD = 245;
+          for (let y = 0; y < height; y++) {
+            const rowStart = y * width * 4;
+            for (let x = 0; x < width; x++) {
+              const idx = rowStart + x * 4;
+              const gray = 0.299 * px[idx] + 0.587 * px[idx + 1] + 0.114 * px[idx + 2];
+              if (gray < WHITE_THRESHOLD) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+              }
+            }
+          }
+          if (maxX < 0) return canvas; // blank page — nothing to crop
+          minX = Math.max(0, minX - padding);
+          minY = Math.max(0, minY - padding);
+          maxX = Math.min(width - 1, maxX + padding);
+          maxY = Math.min(height - 1, maxY + padding);
+          const cropW = maxX - minX + 1, cropH = maxY - minY + 1;
+          const cropped = document.createElement('canvas');
+          cropped.width = cropW;
+          cropped.height = cropH;
+          cropped.getContext('2d').drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+          return cropped;
+        }
+
+        // Binarizes + strips grid/border lines + crops to content + upscales
+        // a native-resolution canvas, producing a clean, crisp, high-contrast
+        // image that OCR reads far more reliably than the raw source.
+        function preprocessForOcr(nativeCanvas) {
+          const nativeCtx = nativeCanvas.getContext('2d', { willReadFrequently: true });
+          const w = nativeCanvas.width, h = nativeCanvas.height;
+
+          // STEP 1: binarize at native resolution first. At native size, each
+          // pixel is either clearly text-dark or clearly cell-light with only
+          // a 1px anti-aliased edge, so thresholding here is clean. (Scaling
+          // up FIRST with smoothed/blurry interpolation, then thresholding,
+          // blends each character's edge pixels into a gray halo before the
+          // cutoff is applied — that's what mangles crisp letters into noise,
+          // e.g. "Fundamental of Management" coming back as "Furdam&ntal or
+          // Manag&mem".)
+          const imageData = nativeCtx.getImageData(0, 0, w, h);
+          const px = imageData.data;
+          for (let i = 0; i < px.length; i += 4) {
+            const gray = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+            const bw = gray > 150 ? 255 : 0; // threshold: dark text -> black, light cell color -> white
+            px[i] = px[i + 1] = px[i + 2] = bw;
+          }
+
+          // STEP 2: strip solid grid/border lines, both horizontal AND
+          // vertical. Screenshots of bordered tables (alternating colored
+          // rows separated by black divider lines, often with an outer box
+          // border too) leave near-full-length black bars after the
+          // threshold above. Those bars sit flush against the text and badly
+          // confuse OCR segmentation — and a leftover vertical border down
+          // the side gets read as a column of stray "|" characters on every
+          // line. A genuine row/column of text, even bold text, never
+          // blackens more than ~50% of its width; a 1-2px divider/border
+          // line is ~95-100% black across its full length. So any row or
+          // column that's almost entirely black is a grid line, not text.
+          const BORDER_LINE_BLACK_FRACTION = 0.85;
+          for (let y = 0; y < h; y++) {
+            const rowStart = y * w * 4;
+            let blackCount = 0;
+            for (let x = 0; x < w; x++) {
+              if (px[rowStart + x * 4] === 0) blackCount++;
+            }
+            if (blackCount / w > BORDER_LINE_BLACK_FRACTION) {
+              for (let x = 0; x < w; x++) {
+                const idx = rowStart + x * 4;
+                px[idx] = px[idx + 1] = px[idx + 2] = 255;
+              }
+            }
+          }
+          for (let x = 0; x < w; x++) {
+            let blackCount = 0;
+            for (let y = 0; y < h; y++) {
+              if (px[(y * w + x) * 4] === 0) blackCount++;
+            }
+            if (blackCount / h > BORDER_LINE_BLACK_FRACTION) {
+              for (let y = 0; y < h; y++) {
+                const idx = (y * w + x) * 4;
+                px[idx] = px[idx + 1] = px[idx + 2] = 255;
+              }
+            }
+          }
+          nativeCtx.putImageData(imageData, 0, 0);
+
+          // STEP 3: crop to the actual content (drops blank PDF-page margins).
+          const cropped = cropToContentBoundingBox(nativeCanvas);
+
+          // STEP 4: NOW upscale — with image smoothing turned OFF so each
+          // original pixel becomes a sharp, solid block instead of being
+          // blurred into its neighbors. OCR reads large crisp text far more
+          // reliably than small smoothed text.
+          const cw = cropped.width, ch = cropped.height;
+          const scale = cw < 900 ? Math.min(4, 900 / cw) : 1;
+          const finalCanvas = document.createElement('canvas');
+          finalCanvas.width = Math.round(cw * scale);
+          finalCanvas.height = Math.round(ch * scale);
+          const finalCtx = finalCanvas.getContext('2d', { willReadFrequently: true });
+          finalCtx.imageSmoothingEnabled = false;
+          finalCtx.drawImage(cropped, 0, 0, finalCanvas.width, finalCanvas.height);
+          return finalCanvas;
+        }
+
+        // Tesseract.js gives MUCH better accuracy than OCRAD for printed
+        // text/tables, but it needs Web Workers + fetching its language data
+        // over the network — which fails if this page is opened directly as
+        // a local file:// (no http(s) origin for the worker/CORS). So: try
+        // Tesseract.js first; if it can't initialize for ANY reason (missing
+        // script, blocked worker, no network), fall back transparently to
+        // OCRAD, which runs fully offline on the main thread with no worker
+        // and works the same whether this file is opened locally or hosted.
+        let _tesseractWorkerPromise = null;
+        function withTimeout(promise, ms, errMsg) {
+          return Promise.race([
+            promise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error(errMsg || 'Timed out')), ms))
+          ]);
+        }
+        function getTesseractWorker() {
+          if (!_tesseractWorkerPromise) {
+            _tesseractWorkerPromise = (typeof Tesseract === 'undefined')
+              ? Promise.reject(new Error('Tesseract.js script did not load'))
+              : withTimeout(Tesseract.createWorker('eng'), 8000, 'Tesseract.js worker init timed out');
+            // Allow a later retry if this attempt failed (don't permanently
+            // cache a rejected promise).
+            _tesseractWorkerPromise.catch(() => { _tesseractWorkerPromise = null; });
+          }
+          return _tesseractWorkerPromise;
+        }
+
+        // Runs OCR on a native-resolution canvas (from either a photo or a
+        // rasterized PDF page) and returns the raw recognized text.
+        async function ocrCanvasToText(nativeCanvas) {
+          const cleanCanvas = preprocessForOcr(nativeCanvas);
+          try {
+            const worker = await getTesseractWorker();
+            const { data } = await withTimeout(worker.recognize(cleanCanvas), 20000, 'Tesseract.js recognition timed out');
+            if (data && data.text && data.text.trim().length > 0) {
+              console.log('[OCR] Tesseract.js output:', data.text);
+              return data.text;
+            }
+            console.warn('[OCR] Tesseract.js returned empty text, falling back to OCRAD');
+          } catch (err) {
+            console.warn('[OCR] Tesseract.js unavailable, falling back to OCRAD:', err);
+          }
+          // Fallback engine — synchronous, fully offline, no worker needed.
+          if (typeof OCRAD === 'undefined') {
+            console.error('[OCR] OCRAD global is not defined either — no OCR engine available.');
+            return '';
+          }
+          const rawText = OCRAD(cleanCanvas) || '';
+          console.log('[OCR] OCRAD output:', rawText);
+          return rawText;
+        }
+
         document.getElementById('summerCoursesFile').addEventListener('change', function(e) {
           const file = e.target.files[0];
           if (!file) return;
           e.target.value = '';
 
+          const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
           const isImage = file.type.startsWith('image/');
 
+          if (isPdf) {
+            runSummerPdfExtraction(file);
+            return;
+          }
+
           if (!isImage) {
-            // Plain text / CSV path — codes are typed cleanly, split directly.
+            // Plain text / CSV path. Runs through the same code+name matcher as the
+            // image/OCR path below, so a file listing course NAMES (e.g. exported
+            // from a table) works just as well as a file listing course CODES.
+            // (Previously this path took every line literally as a "code", so a
+            // name like "Selected labs in AI" got added as a bogus unrecognized
+            // code instead of being matched to the real course.)
             const reader = new FileReader();
             reader.onload = function(ev) {
               const text = ev.target.result;
-              text.split(/[,\n\r]+/).map(s => s.trim().toUpperCase()).filter(Boolean).forEach(code => {
-                window.summerAvailableCodes.add(code);
-              });
+              const matched = extractKnownCourseCodes(text);
+              matched.forEach(code => window.summerAvailableCodes.add(code));
               renderSummerTags();
-              if (typeof TechBot !== 'undefined' && TechBot.success) {
-                TechBot.success('☀️ Summer course list loaded: ' + window.summerAvailableCodes.size + ' courses.');
+              if (matched.size > 0) {
+                if (typeof TechBot !== 'undefined' && TechBot.success) {
+                  TechBot.success('☀️ Summer course list loaded: ' + matched.size + ' course(s).');
+                }
+              } else if (typeof TechBot !== 'undefined' && TechBot.error) {
+                TechBot.error('⚠️ Could not recognize any courses in that file. Make sure each line is a known course code or course name.');
               }
             };
             reader.readAsText(file);
             return;
           }
 
-          // Image path — run in-browser OCR. We use OCRAD.js instead of
-          // Tesseract.js here because Tesseract relies on a separate Web Worker
-          // thread, which browsers block when this page is opened directly as a
-          // local file:// (the security restriction is "Unsafe attempt to load
-          // URL... 'file:' URLs are treated as unique security origins"). OCRAD.js
-          // runs synchronously on the main thread with no worker, so it works the
-          // same whether this file is opened locally or hosted on a server — at
-          // the cost of being a simpler, less accurate OCR engine than Tesseract.
-          if (typeof OCRAD === 'undefined') {
-            if (typeof TechBot !== 'undefined' && TechBot.error) {
-              TechBot.error('⚠️ OCR library failed to load. Check your internet connection and try again, or upload a .txt/.csv instead.');
-            }
-            return;
-          }
-
+          // Image path — run OCR (see ocrCanvasToText / preprocessForOcr above).
           const hint = document.getElementById('summerUploadHint');
           const prevHintText = hint.textContent;
           hint.style.display = '';
           hint.textContent = '🔍 Reading the course list from the image… this can take a few seconds.';
 
+          console.log('[Summer OCR] Starting OCR for file:', file.name, file.type, file.size, 'bytes');
+
           const img = new Image();
           const objectUrl = URL.createObjectURL(file);
 
-          img.onload = function() {
+          img.onload = async function() {
+            console.log('[Summer OCR] Image loaded:', img.width, 'x', img.height);
             try {
-              // Upscale small images — OCR engines read larger text more reliably.
-              const scale = img.width < 900 ? Math.min(3, 900 / img.width) : 1;
-              const canvas = document.createElement('canvas');
-              canvas.width = Math.round(img.width * scale);
-              canvas.height = Math.round(img.height * scale);
-              const ctx = canvas.getContext('2d');
-              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              const nativeCanvas = document.createElement('canvas');
+              nativeCanvas.width = img.width;
+              nativeCanvas.height = img.height;
+              nativeCanvas.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0);
 
-              // Preprocess: convert to high-contrast black-on-white. OCRAD.js (a
-              // simple rule-based engine) reads clean black text on white far more
-              // reliably than colored table cells like this course-list image.
-              const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-              const px = imageData.data;
-              for (let i = 0; i < px.length; i += 4) {
-                const gray = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
-                const bw = gray > 150 ? 255 : 0; // threshold: dark text -> black, light cell color -> white
-                px[i] = px[i + 1] = px[i + 2] = bw;
-              }
-              ctx.putImageData(imageData, 0, 0);
-
-              const rawText = OCRAD(canvas) || '';
+              const rawText = await ocrCanvasToText(nativeCanvas);
               URL.revokeObjectURL(objectUrl);
 
               const matched = extractKnownCourseCodes(rawText);
+              console.log('[Summer OCR] Matched codes:', [...matched]);
               matched.forEach(code => window.summerAvailableCodes.add(code));
               renderSummerTags();
               if (matched.size > 0) {
@@ -8081,20 +8342,21 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
               } else {
                 hint.textContent = prevHintText;
                 if (typeof TechBot !== 'undefined' && TechBot.error) {
-                  TechBot.error('⚠️ Could not recognize any courses in that image. Try a clearer, higher-contrast photo, or type/upload the codes directly.');
+                  TechBot.error('⚠️ Could not recognize any courses in that image (open the browser console with F12 to see what OCR actually read). Try a clearer, higher-contrast photo, or type/upload the codes directly.');
                 }
               }
             } catch (err) {
-              console.error('OCR error:', err);
+              console.error('[Summer OCR] Exception during OCR:', err);
               URL.revokeObjectURL(objectUrl);
               hint.textContent = prevHintText;
               if (typeof TechBot !== 'undefined' && TechBot.error) {
-                TechBot.error('⚠️ Could not read that image. Try a clearer photo, or type/upload the codes directly.');
+                TechBot.error('⚠️ OCR error: ' + (err && err.message ? err.message : err) + ' — open the browser console (F12) for details, or type/upload the codes directly.');
               }
             }
           };
 
-          img.onerror = function() {
+          img.onerror = function(ev) {
+            console.error('[Summer OCR] Image failed to load:', ev);
             URL.revokeObjectURL(objectUrl);
             hint.textContent = prevHintText;
             if (typeof TechBot !== 'undefined' && TechBot.error) {
@@ -8104,6 +8366,96 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
           img.src = objectUrl;
         });
+
+        // PDF path: try the PDF's real embedded text layer first (fast,
+        // exact, no OCR needed); if that yields nothing — e.g. the PDF is
+        // just a scanned page or a screenshot of a course-offerings table
+        // saved/printed as a PDF — fall back to rasterizing each page and
+        // running it through the exact same OCR pipeline used for uploaded
+        // photos above.
+        async function runSummerPdfExtraction(file) {
+          if (typeof pdfjsLib === 'undefined') {
+            if (typeof TechBot !== 'undefined' && TechBot.error) {
+              TechBot.error('⚠️ PDF library failed to load. Check your internet connection, or type/upload the codes directly.');
+            }
+            return;
+          }
+
+          const hint = document.getElementById('summerUploadHint');
+          const prevHintText = hint.textContent;
+          hint.style.display = '';
+          hint.textContent = '🔍 Reading the course list from the PDF… this can take a few seconds.';
+
+          console.log('[Summer PDF] Starting extraction for file:', file.name, file.type, file.size, 'bytes');
+
+          try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+            // 1) Try the PDF's real text layer first — fast and exact when present
+            // (e.g. a course list exported/typed straight into a PDF or table).
+            let textLayer = '';
+            for (let i = 1; i <= pdf.numPages; i++) {
+              const page = await pdf.getPage(i);
+              const textContent = await page.getTextContent();
+              textLayer += textContent.items.map(item => item.str).join(' ') + '\n';
+            }
+
+            let matched = extractKnownCourseCodes(textLayer);
+            console.log('[Summer PDF] Text-layer matches:', [...matched]);
+
+            // 2) No matches from the text layer — most likely because there IS
+            // no real text layer at all, just an embedded image (a phone photo
+            // or screenshot of the course-offerings board saved as a PDF).
+            // Rasterize every page and OCR it, same as the photo-upload path.
+            if (matched.size === 0) {
+              console.log('[Summer PDF] No text-layer matches, falling back to OCR rasterization');
+              let ocrText = '';
+              for (let i = 1; i <= pdf.numPages; i++) {
+                if (pdf.numPages > 1) {
+                  hint.textContent = `🔍 Reading page ${i} of ${pdf.numPages} from the PDF… this can take a few seconds.`;
+                }
+                const page = await pdf.getPage(i);
+                const baseViewport = page.getViewport({ scale: 1 });
+                // Render at a high-enough resolution that even a small
+                // embedded screenshot ends up with plenty of pixels to OCR.
+                const scale = Math.max(2, 1600 / baseViewport.width);
+                const viewport = page.getViewport({ scale });
+
+                const pageCanvas = document.createElement('canvas');
+                pageCanvas.width = Math.round(viewport.width);
+                pageCanvas.height = Math.round(viewport.height);
+                const pageCtx = pageCanvas.getContext('2d', { willReadFrequently: true });
+                await page.render({ canvasContext: pageCtx, viewport }).promise;
+
+                ocrText += (await ocrCanvasToText(pageCanvas)) + '\n';
+              }
+              console.log('[Summer PDF] OCR raw output:', ocrText);
+              matched = extractKnownCourseCodes(ocrText);
+              console.log('[Summer PDF] OCR matches:', [...matched]);
+            }
+
+            matched.forEach(code => window.summerAvailableCodes.add(code));
+            renderSummerTags();
+
+            if (matched.size > 0) {
+              if (typeof TechBot !== 'undefined' && TechBot.success) {
+                TechBot.success('☀️ Found ' + matched.size + ' course(s) in the PDF.');
+              }
+            } else {
+              hint.textContent = prevHintText;
+              if (typeof TechBot !== 'undefined' && TechBot.error) {
+                TechBot.error('⚠️ Could not recognize any courses in that PDF (open the browser console with F12 to see what was read). Try a clearer file, or type/upload the codes directly.');
+              }
+            }
+          } catch (err) {
+            console.error('[Summer PDF] Exception during PDF extraction:', err);
+            hint.textContent = prevHintText;
+            if (typeof TechBot !== 'undefined' && TechBot.error) {
+              TechBot.error('⚠️ PDF error: ' + (err && err.message ? err.message : err) + ' — open the browser console (F12) for details, or type/upload the codes directly.');
+            }
+          }
+        }
 
         // Handle file upload
         document.getElementById('pdfInput').addEventListener('change', async function(e) {
@@ -8342,15 +8694,15 @@ body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relati
 
       <!-- Summer Available Courses Upload -->
       <div class="summer-upload-box" id="summerUploadBox">
-        <input type="file" id="summerCoursesFile" accept=".txt,.csv,image/*" />
+        <input type="file" id="summerCoursesFile" accept=".txt,.csv,.pdf,application/pdf,image/*" />
         <div class="summer-upload-header">
           <span class="summer-upload-title">☀️ Available Courses — Starting Summer
             <span style="font-weight:400;font-size:12px;color:#b45309;">(optional)</span>
           </span>
-          <button class="summer-upload-btn" id="summerUploadBtn" type="button">📋 Upload List or Photo</button>
+          <button class="summer-upload-btn" id="summerUploadBtn" type="button">📋 Upload List, PDF, or Photo</button>
         </div>
         <div class="summer-courses-tags" id="summerCoursesTags"></div>
-        <p class="summer-upload-hint" id="summerUploadHint">Only applies to the very first detected/starting summer — later summers in the plan are unaffected. Upload a .txt/.csv or a photo of the course list, or type codes below.</p>
+        <p class="summer-upload-hint" id="summerUploadHint">Only applies to the very first detected/starting summer — later summers in the plan are unaffected. Upload a .txt/.csv, a PDF, or a photo of the course list (even a screenshot saved as PDF), or type codes below.</p>
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
           <input type="text" id="summerCourseInput" placeholder="e.g. CS319, IT322, TR" style="flex:1;padding:7px 12px;border:1px solid #fed7aa;border-radius:6px;font-size:13px;background:#fffbf7;outline:none;" />
           <button onclick="addSummerCourseFromInput()" type="button" style="padding:7px 14px;background:#f97316;color:white;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Add</button>
